@@ -4,13 +4,21 @@
   'use strict';
 
   const API = 'https://devfest-vibe-lounge.web.app/api';
+  const EVENT_TZ = 'Europe/Prague';
   const POLL_MS = 10000;
   const CADENCE_MS = 60000;
   const LOG_SIZE = 30;
   const TAPE_TAIL = 240;
+  const NEXT_LIMIT = 4;
   const STORE_KEY = 'vibe-enigma:agenda:v1';
+  const SOUND_KEY = 'vibe-enigma:sound';
   const LAYOUT = ['QWERTZUIO', 'ASDFGHJK', 'PYXCVBNML'];
+  const SLOTS = ['left', 'middle', 'right'];
+  const FLAGS = { now: 'On now', next: 'Up next' };
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const { parseTalk, minutes, slotKey, schedule } = window.VibeAgenda;
+  const sound = window.VibeSound;
+  const eventFormat = timeFormat();
 
   let spec = null;
   let decoder = null; // decodes transmissions; the page never touches it
@@ -22,6 +30,7 @@
   let liveToken = 0;
   let playToken = 0;
   let litLamp = null;
+  let lastMinute = -1;
   let tapeIn = '';
   let tapeOut = '';
   let tapeStart = 'AAA';
@@ -52,15 +61,44 @@
     return `${count} ${word}${count === 1 ? '' : 's'}`;
   }
 
-  function minutes(time) {
-    const [h, m] = time.split(':').map(Number);
-    return h * 60 + m;
+  function pad(value) {
+    return String(value).padStart(2, '0');
+  }
+
+  function timeFormat() {
+    try {
+      return new Intl.DateTimeFormat('en-GB', {
+        timeZone: EVENT_TZ,
+        hourCycle: 'h23',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+    } catch (err) {
+      return null; // No time zone support: fall back to the device clock.
+    }
+  }
+
+  // Hours, minutes and seconds on the event's clock, wherever the viewer is.
+  function eventClock(date = new Date()) {
+    if (!eventFormat) return [date.getHours(), date.getMinutes(), date.getSeconds()];
+    const parts = {};
+    for (const { type, value } of eventFormat.formatToParts(date)) parts[type] = Number(value);
+    return [parts.hour, parts.minute, parts.second];
   }
 
   function clockTime(iso) {
     const date = new Date(iso);
     if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const [h, m] = eventClock(date);
+    return `${pad(h)}:${pad(m)}`;
+  }
+
+  function duration(mins) {
+    const total = Math.round(mins);
+    if (total < 60) return `${total} min`;
+    const rest = total % 60;
+    return rest ? `${Math.floor(total / 60)} h ${rest} min` : `${total / 60} h`;
   }
 
   async function getJson(path) {
@@ -69,23 +107,12 @@
     return response.json();
   }
 
-  // "10:50 SPEAKEASY: TITLE: SUBTITLE / SPEAKER, SPEAKER"
-  function parseTalk(plain) {
-    const match = /^(\d{1,2}:\d{2})\s+([^:]+?):\s*(.*)$/.exec(plain || '');
-    if (!match) return { time: '', room: '', title: plain || '', speakers: '' };
-    const [, time, room, rest] = match;
-    const cut = rest.lastIndexOf(' / ');
-    return cut === -1
-      ? { time, room, title: rest, speakers: '' }
-      : { time, room, title: rest.slice(0, cut), speakers: rest.slice(cut + 3) };
-  }
-
   // ---------- boot ----------
 
   async function start() {
+    setupSound();
     tick();
     setInterval(tick, 1000);
-    renderAgenda([]);
     renderLog();
     showSource();
 
@@ -115,7 +142,7 @@
   function renderSpec() {
     const facts = [
       ['Machine', spec.machine || 'Enigma'],
-      ['Rotors', machine.rotorNames.join(' ')],
+      ['Rotors', spec.rotors.map((r) => r.name).join(' ')],
       ['UKW', machine.reflectorName],
       ['Rings', machine.getRings()],
       ['Plugs', machine.getPlugboardPairs().join(' ') || 'none'],
@@ -148,6 +175,30 @@
     $('source').append(link);
   }
 
+  function setupSound() {
+    try {
+      sound.enabled = localStorage.getItem(SOUND_KEY) !== 'off';
+    } catch (err) {
+      sound.enabled = true;
+    }
+    const toggle = $('sound-toggle');
+    const render = () => {
+      toggle.textContent = sound.enabled ? 'Sound on' : 'Sound off';
+      toggle.setAttribute('aria-pressed', String(sound.enabled));
+    };
+    toggle.addEventListener('click', () => {
+      sound.enabled = !sound.enabled;
+      try {
+        localStorage.setItem(SOUND_KEY, sound.enabled ? 'on' : 'off');
+      } catch (err) {
+        // Storage off: the choice lasts for this visit.
+      }
+      render();
+      sound.ratchet();
+    });
+    render();
+  }
+
   // ---------- transmissions ----------
 
   async function poll() {
@@ -168,7 +219,7 @@
       if (arrived.length) {
         trimLog();
         saveAgenda();
-        renderAgenda(booted ? arrived : []);
+        refreshAgenda(booted ? arrived : []);
         renderLog();
         const latest = arrived[arrived.length - 1];
         if (!newest || latest.number > newest.number) {
@@ -208,7 +259,13 @@
   }
 
   function tick() {
-    $('clock').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const [h, m, s] = eventClock();
+    $('clock').textContent = `${pad(h)}:${pad(m)}:${pad(s)}`;
+    if (h * 60 + m !== lastMinute) {
+      lastMinute = h * 60 + m;
+      refreshAgenda([]);
+    }
+
     const next = $('next');
     if (!signalOk) {
       next.textContent = 'Signal lost · retrying';
@@ -218,7 +275,7 @@
     if (Number.isNaN(sent)) return;
     const left = Math.min(60, Math.ceil((sent + CADENCE_MS - Date.now()) / 1000));
     if (left > 0) {
-      next.textContent = `Next in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+      next.textContent = `Next in ${Math.floor(left / 60)}:${pad(left % 60)}`;
     } else {
       next.textContent = 'Next any second';
       if (left > -120 && -left % 3 === 0) poll();
@@ -291,10 +348,6 @@
 
   // ---------- agenda ----------
 
-  function slotKey(talk) {
-    return `${talk.time}|${talk.room}`;
-  }
-
   function loadAgenda() {
     try {
       const list = JSON.parse(localStorage.getItem(STORE_KEY) || '[]');
@@ -320,7 +373,43 @@
     agenda.set(slotKey(t.talk), { time, room, title, speakers, sentAt: t.sentAt });
   }
 
-  function renderAgenda(fresh) {
+  // Redraws everything that depends on the agenda or the time of day.
+  function refreshAgenda(fresh) {
+    const plan = schedule([...agenda.values()], lastMinute);
+    renderNow(plan);
+    renderAgenda(fresh, plan.status);
+  }
+
+  function renderNow(plan) {
+    $('now-list').replaceChildren(...plan.onNow.map((item) => {
+      const elapsed = lastMinute - item.start;
+      return nowItem(item.talk, elapsed < 1 ? 'Just started' : `Since ${item.talk.time} · ${duration(elapsed)} in`);
+    }));
+    $('next-list').replaceChildren(...plan.upNext.slice(0, NEXT_LIMIT).map((item) => (
+      nowItem(item.talk, `${item.talk.time} · in ${duration(item.start - lastMinute)}`)
+    )));
+
+    const heard = agenda.size;
+    const nowEmpty = $('now-empty');
+    nowEmpty.hidden = plan.onNow.length > 0;
+    if (!heard) nowEmpty.textContent = 'Waiting for the first talks to be decoded.';
+    else if (plan.upNext.length) nowEmpty.textContent = 'Nothing on right now, between sessions.';
+    else nowEmpty.textContent = "That's a wrap for today.";
+    const nextEmpty = $('next-empty');
+    nextEmpty.hidden = plan.upNext.length > 0;
+    nextEmpty.textContent = heard ? 'No more talks heard for today.' : 'Fills in as transmissions are decoded.';
+  }
+
+  function nowItem(talk, when) {
+    const item = el('li', 'now-item');
+    const head = el('div', 'talk-head');
+    head.append(el('span', 'room', talk.room), el('span', 'now-when', when));
+    item.append(head, el('h3', null, talk.title));
+    if (talk.speakers) item.append(el('p', null, talk.speakers));
+    return item;
+  }
+
+  function renderAgenda(fresh, status) {
     const freshKeys = new Set(fresh.map((t) => slotKey(t.talk)));
     const slots = new Map();
     for (const talk of agenda.values()) {
@@ -331,16 +420,13 @@
     const rows = [...slots.keys()]
       .sort((a, b) => minutes(a) - minutes(b))
       .map((time) => {
+        const talks = slots.get(time).sort((a, b) => a.room.localeCompare(b.room));
+        const states = talks.map((talk) => status.get(slotKey(talk)));
         const row = el('li', 'slot');
-        const talks = el('ul', 'slot-talks');
-        for (const talk of slots.get(time).sort((a, b) => a.room.localeCompare(b.room))) {
-          const item = el('li', 'talk');
-          if (freshKeys.has(slotKey(talk))) item.classList.add('is-fresh');
-          item.append(el('span', 'room', talk.room), el('h3', null, talk.title));
-          if (talk.speakers) item.append(el('p', null, talk.speakers));
-          talks.append(item);
-        }
-        row.append(el('p', 'slot-time', time), talks);
+        row.classList.toggle('is-past', states.every((state) => state === 'past'));
+        const list = el('ul', 'slot-talks');
+        talks.forEach((talk, i) => list.append(agendaItem(talk, states[i], freshKeys.has(slotKey(talk)))));
+        row.append(el('p', 'slot-time', time), list);
         return row;
       });
 
@@ -350,6 +436,18 @@
     $('agenda-count').textContent = agenda.size
       ? `${plural(agenda.size, 'talk')} · ${plural(rooms.size, 'room')}`
       : '';
+  }
+
+  function agendaItem(talk, state, fresh) {
+    const item = el('li', 'talk');
+    if (state) item.classList.add(`is-${state}`);
+    if (fresh) item.classList.add('is-fresh');
+    const head = el('div', 'talk-head');
+    head.append(el('span', 'room', talk.room));
+    if (FLAGS[state]) head.append(el('span', `flag flag-${state}`, FLAGS[state]));
+    item.append(head, el('h3', null, talk.title));
+    if (talk.speakers) item.append(el('p', null, talk.speakers));
+    return item;
   }
 
   // ---------- intercept log ----------
@@ -383,17 +481,21 @@
   function buildMachine() {
     const ukw = el('div', 'ukw');
     ukw.append('UKW', el('strong', null, machine.reflectorName));
-    const rotors = machine.rotorNames.map((name, slot) => {
+    const rotors = SLOTS.map((slotName, slot) => {
       const rotor = el('div', 'rotor');
       const win = el('output', 'rotor-window');
       win.id = `rotor-${slot}`;
-      win.setAttribute('aria-label', `Rotor ${name} position`);
+      win.setAttribute('aria-label', `${slotName} rotor position`);
+      const name = el('span', 'rotor-name');
+      name.id = `rotor-name-${slot}`;
+      const notch = el('span', 'rotor-notch');
+      notch.id = `rotor-notch-${slot}`;
       rotor.append(
-        machineButton('rotor-btn', '▲', `Turn rotor ${name} forward`, () => turn(slot, 1)),
+        machineButton('rotor-btn', '▲', `Turn the ${slotName} rotor forward`, () => turn(slot, 1)),
         win,
-        machineButton('rotor-btn', '▼', `Turn rotor ${name} back`, () => turn(slot, -1)),
-        el('span', 'rotor-name', name),
-        el('span', 'rotor-notch', `notch ${machine.notches[slot]}`),
+        machineButton('rotor-btn', '▼', `Turn the ${slotName} rotor back`, () => turn(slot, -1)),
+        name,
+        notch,
       );
       return rotor;
     });
@@ -415,13 +517,23 @@
       $('keys').append(keyRow);
     }
 
-    const names = machine.rotorNames;
-    const stages = ['Key', 'Plug', ...[...names].reverse(), 'UKW', ...names, 'Plug'];
-    $('path').replaceChildren(...stages.map((label) => {
+    // Key, plug, three rotors, reflector, three rotors back, plug. The labels
+    // follow the rotor order, so renderRotorLabels fills them in.
+    $('path').replaceChildren(...Array.from({ length: 10 }, () => {
       const stage = el('div', 'stage');
-      stage.append(el('span', 'stage-label', label), el('span', 'stage-letter', '·'));
+      stage.append(el('span', 'stage-label'), el('span', 'stage-letter', '·'));
       return stage;
     }));
+
+    SLOTS.forEach((slotName, slot) => {
+      const select = $(`set-order-${slot}`);
+      select.replaceChildren(...machine.availableRotors.map((name) => {
+        const option = el('option', null, name);
+        option.value = name;
+        return option;
+      }));
+      select.addEventListener('change', () => chooseRotor(slot, select.value));
+    });
 
     $('machine-card').addEventListener('keydown', onKeyDown);
     keepFocus($('key-space'));
@@ -442,6 +554,7 @@
       applyBroadcastKey();
       machine.setPositions('AAA');
       resetTape();
+      sound.ratchet();
       note('Set to the broadcast key');
     });
     $('message-form').addEventListener('submit', (event) => {
@@ -452,6 +565,7 @@
       feed(text, reduceMotion ? 0 : 30);
     });
 
+    renderRotorLabels();
     resetTape();
   }
 
@@ -494,7 +608,8 @@
     press(letter);
   }
 
-  function press(letter) {
+  // `soft` is for playback, where letters come too fast for full sound.
+  function press(letter, soft = false) {
     undo.push(machine.getPositions());
     const result = machine.press(letter);
     tapeIn += letter;
@@ -504,13 +619,16 @@
     showPath(result.path);
     flashKey(letter);
     renderTape();
+    sound.key(soft ? 0.35 : 1);
+    sound.lamp(result.output, soft);
   }
 
-  function passThrough(ch) {
+  function passThrough(ch, soft = false) {
     undo.push(machine.getPositions());
     tapeIn += ch;
     tapeOut += ch;
     renderTape();
+    if (!soft) sound.key(0.6);
   }
 
   function erase() {
@@ -522,12 +640,14 @@
     syncWindows();
     lightLamp(null);
     renderTape();
+    sound.ratchet();
   }
 
   function rewind() {
     stopPlayback();
     machine.setPositions(tapeStart);
     resetTape();
+    sound.ratchet();
     note(`Rewound to ${tapeStart}`);
   }
 
@@ -538,6 +658,36 @@
     letters[slot] = alphabet[(alphabet.indexOf(letters[slot]) + delta + alphabet.length) % alphabet.length];
     machine.setPositions(letters.join(''));
     resetTape();
+    sound.ratchet();
+  }
+
+  // Putting a rotor into a slot swaps it with the one already there, the way
+  // you'd lift the rotors out and reorder them on the spindle.
+  function chooseRotor(slot, name) {
+    const order = machine.rotorNames;
+    const from = order.indexOf(name);
+    if (from === -1 || from === slot) return;
+    [order[slot], order[from]] = [order[from], order[slot]];
+    stopPlayback();
+    machine.setRotorOrder(order);
+    renderRotorLabels();
+    resetTape();
+    sound.ratchet();
+    note(`Rotor order ${order.join(' · ')}`);
+  }
+
+  function renderRotorLabels() {
+    const names = machine.rotorNames;
+    const { notches } = machine;
+    names.forEach((name, slot) => {
+      $(`rotor-name-${slot}`).textContent = name;
+      $(`rotor-notch-${slot}`).textContent = `notch ${notches[slot]}`;
+      $(`set-order-${slot}`).value = name;
+    });
+    const stages = ['Key', 'Plug', ...[...names].reverse(), 'UKW', ...names, 'Plug'];
+    $('path').querySelectorAll('.stage-label').forEach((label, i) => {
+      label.textContent = stages[i];
+    });
   }
 
   // A new message starts wherever the rotors are now.
@@ -553,8 +703,10 @@
   }
 
   function applyBroadcastKey() {
+    machine.setRotorOrder(spec.rotors.map((r) => r.name));
     machine.setRings(spec.rings || 'AAA');
     machine.setPlugboard(spec.plugboard || []);
+    renderRotorLabels();
     for (const id of ['set-start', 'set-rings', 'set-plugs']) $(id).removeAttribute('aria-invalid');
     $('settings-error').textContent = '';
   }
@@ -576,8 +728,8 @@
     if (delay) await sleep(300);
     for (const ch of text) {
       if (token !== playToken) return;
-      if (machine.isLetter(ch)) press(ch.toUpperCase());
-      else passThrough(ch);
+      if (machine.isLetter(ch)) press(ch.toUpperCase(), true);
+      else passThrough(ch, true);
       if (delay) await sleep(machine.isLetter(ch) ? delay : delay / 4);
     }
   }

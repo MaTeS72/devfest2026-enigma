@@ -26,7 +26,7 @@
   </header>
 
   <nav class="jump" aria-label="Sections">
-    <a href="#live">Live</a><a href="#agenda">Agenda</a><a href="#machine">Machine</a><a href="#log">Log</a>
+    <a href="#live">Live</a><a href="#now">Now</a><a href="#agenda">Agenda</a><a href="#machine">Machine</a><a href="#log">Log</a>
   </nav>
 
   <main class="layout">
@@ -54,6 +54,25 @@
         </article>
       </section>
 
+      <section id="now" class="block" aria-labelledby="now-heading">
+        <div class="block-head">
+          <h2 id="now-heading">On now · up next</h2>
+          <span class="meta" id="now-meta">Prague time</span>
+        </div>
+        <div class="now-grid">
+          <div class="paper now-card">
+            <p class="now-label"><span class="dot" aria-hidden="true"></span>On now</p>
+            <ul class="now-list" id="now-list"></ul>
+            <p class="empty" id="now-empty"></p>
+          </div>
+          <div class="paper now-card">
+            <p class="now-label">Up next</p>
+            <ul class="now-list" id="next-list"></ul>
+            <p class="empty" id="next-empty"></p>
+          </div>
+        </div>
+      </section>
+
       <section id="agenda" class="block" aria-labelledby="agenda-heading">
         <div class="block-head">
           <h2 id="agenda-heading">The agenda, decoded</h2>
@@ -71,7 +90,7 @@
       <section id="machine" class="block" aria-labelledby="machine-heading">
         <div class="block-head">
           <h2 id="machine-heading">The machine</h2>
-          <span class="meta" id="machine-note">Set it, then type</span>
+          <button type="button" class="sound-toggle" id="sound-toggle" aria-pressed="true">Sound on</button>
         </div>
         <div class="machine" id="machine-card" tabindex="0" aria-label="Enigma machine. Type letters to send them through it.">
           <div class="rotors" id="rotors"></div>
@@ -84,6 +103,7 @@
             <button type="button" class="btn" id="key-rewind">Rewind</button>
           </div>
           <div class="tape">
+            <p class="tape-head"><span class="tape-label">Tape</span><span id="machine-note">Set it, then type</span></p>
             <p><span class="tape-label">In</span><span id="tape-in"></span></p>
             <p><span class="tape-label">Out</span><span id="tape-out" aria-live="polite"></span></p>
           </div>
@@ -91,6 +111,14 @@
         </div>
 
         <form class="settings" id="settings" autocomplete="off" novalidate>
+          <fieldset class="wide order">
+            <legend>Rotor order, left to right</legend>
+            <div class="order-row">
+              <select id="set-order-0" aria-label="Left rotor"></select>
+              <select id="set-order-1" aria-label="Middle rotor"></select>
+              <select id="set-order-2" aria-label="Right rotor"></select>
+            </div>
+          </fieldset>
           <label>Rotor start
             <input id="set-start" maxlength="3" spellcheck="false" autocapitalize="characters">
           </label>
@@ -130,6 +158,8 @@
   </footer>
 
   <script src="enigma.js"></script>
+  <script src="agenda.js"></script>
+  <script src="sound.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

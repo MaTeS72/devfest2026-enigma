@@ -13,7 +13,8 @@
       throw new Error('Enigma I takes exactly three rotors');
     }
 
-    const rotors = spec.rotors.map((r) => {
+    // The rotors the API lists. `rotors` is the order they sit in, left to right.
+    const catalogue = spec.rotors.map((r) => {
       const forward = Array.from(r.wiring, index);
       const backward = new Array(n);
       forward.forEach((out, i) => { backward[out] = i; });
@@ -21,6 +22,7 @@
     });
     const reflector = Array.from(spec.reflector.wiring, index);
 
+    let rotors = catalogue.slice();
     let rings = [0, 0, 0];
     let positions = [0, 0, 0];
     let plugboard = identity();
@@ -33,6 +35,19 @@
       const letters = String(value || '').toUpperCase().replace(/[^A-Z]/g, '');
       if (letters.length !== 3) throw new Error(`${label} needs three letters`);
       return Array.from(letters, index);
+    }
+
+    // Accepts ["II", "I", "III"] or "II I III". Each rotor sits in one slot only.
+    function setRotorOrder(names) {
+      const list = Array.isArray(names) ? names : String(names || '').trim().split(/[\s,]+/);
+      if (list.length !== 3) throw new Error('Pick three rotors, left to right');
+      const picked = list.map((name) => {
+        const rotor = catalogue.find((r) => r.name === name);
+        if (!rotor) throw new Error(`There is no rotor ${name}`);
+        return rotor;
+      });
+      if (new Set(picked).size !== 3) throw new Error('Each rotor can only sit in one slot');
+      rotors = picked;
     }
 
     function setRings(value) {
@@ -140,9 +155,15 @@
 
     return {
       alphabet,
-      rotorNames: rotors.map((r) => r.name),
+      availableRotors: catalogue.map((r) => r.name),
       reflectorName: spec.reflector.name,
-      notches: rotors.map((r) => r.notches.map((i) => alphabet[i]).join('')),
+      get rotorNames() {
+        return rotors.map((r) => r.name);
+      },
+      get notches() {
+        return rotors.map((r) => r.notches.map((i) => alphabet[i]).join(''));
+      },
+      setRotorOrder,
       setRings,
       getRings: () => rings.map((r) => alphabet[r]).join(''),
       setPositions,
