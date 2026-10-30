@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Enigma Decoder · Vibe Lounge</title>
+  <meta name="description" content="A web Enigma I that loads the DevFest Vibe Lounge machine from its API and decodes the agenda transmissions live.">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta property="og:title" content="Enigma Decoder · Vibe Lounge">
+  <meta property="og:description" content="The DevFest agenda, intercepted and decoded live on a web Enigma I.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230a0a0a'/%3E%3Crect x='17' y='12' width='30' height='40' rx='3' fill='%23f3f0e8'/%3E%3Ctext x='32' y='42' font-family='monospace' font-size='28' font-weight='700' text-anchor='middle' fill='%230a0a0a'%3EE%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Courier+Prime:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="topbar">
+      <span>Vibe Lounge · DevFest 2026</span>
+      <span class="onair"><span class="dot" id="signal-dot" aria-hidden="true"></span>On air <time id="clock">--:--:--</time></span>
+    </div>
+    <h1>Enigma<br>decoder.</h1>
+    <p class="lede">Loads the lounge's machine from <code>/api/enigma</code>, tunes in to <code>/api/transmissions</code> and reads the agenda out as it goes on air.</p>
+    <ul class="spec" id="spec" aria-live="polite"><li>Reading the machine…</li></ul>
+  </header>
+
+  <nav class="jump" aria-label="Sections">
+    <a href="#live">Live</a><a href="#agenda">Agenda</a><a href="#machine">Machine</a><a href="#log">Log</a>
+  </nav>
+
+  <main class="layout">
+    <div class="col">
+      <section id="live" class="block" aria-labelledby="live-heading">
+        <div class="block-head">
+          <h2 id="live-heading">Intercepted transmission</h2>
+          <span class="meta" id="next">Tuning in…</span>
+        </div>
+        <article class="live">
+          <div class="live-top">
+            <p class="live-no">N° <span id="live-number">—</span></p>
+            <figure class="start">
+              <div class="windows" id="live-rotors"><span>·</span><span>·</span><span>·</span></div>
+              <figcaption id="live-rotors-label">Rotor start</figcaption>
+            </figure>
+          </div>
+          <p class="cipher" id="live-cipher">Waiting for the first transmission…</p>
+          <p class="plain caret" id="live-plain" aria-live="polite"></p>
+          <div class="talk-card" id="live-talk" hidden>
+            <p class="talk-when"><span id="live-time"></span><span class="room" id="live-room"></span></p>
+            <h3 class="talk-title" id="live-title"></h3>
+            <p class="talk-speakers" id="live-speakers"></p>
+          </div>
+        </article>
+      </section>
+
+      <section id="agenda" class="block" aria-labelledby="agenda-heading">
+        <div class="block-head">
+          <h2 id="agenda-heading">The agenda, decoded</h2>
+          <span class="meta" id="agenda-count"></span>
+        </div>
+        <div class="paper">
+          <ol class="slots" id="agenda-list"></ol>
+          <p class="empty" id="agenda-empty">Nothing decoded yet. Talks land here as transmissions come in.</p>
+          <p class="paper-note">The API only holds the last ten transmissions, so the timetable fills in as you listen. This browser keeps what it has heard.</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="col">
+      <section id="machine" class="block" aria-labelledby="machine-heading">
+        <div class="block-head">
+          <h2 id="machine-heading">The machine</h2>
+          <span class="meta" id="machine-note">Set it, then type</span>
+        </div>
+        <div class="machine" id="machine-card" tabindex="0" aria-label="Enigma machine. Type letters to send them through it.">
+          <div class="rotors" id="rotors"></div>
+          <div class="board" id="lamps" aria-hidden="true"></div>
+          <div class="path" id="path" aria-label="Signal path of the last letter"></div>
+          <div class="board" id="keys"></div>
+          <div class="key-extra">
+            <button type="button" class="btn" id="key-space">Space</button>
+            <button type="button" class="btn" id="key-erase" aria-label="Delete the last letter">⌫</button>
+            <button type="button" class="btn" id="key-rewind">Rewind</button>
+          </div>
+          <div class="tape">
+            <p><span class="tape-label">In</span><span id="tape-in"></span></p>
+            <p><span class="tape-label">Out</span><span id="tape-out" aria-live="polite"></span></p>
+          </div>
+          <p class="hint">Click the machine and type on your keyboard, or tap the keys. Enigma is its own inverse: rewind and type the output to get the input back.</p>
+        </div>
+
+        <form class="settings" id="settings" autocomplete="off" novalidate>
+          <label>Rotor start
+            <input id="set-start" maxlength="3" spellcheck="false" autocapitalize="characters">
+          </label>
+          <label>Rings
+            <input id="set-rings" maxlength="3" spellcheck="false" autocapitalize="characters">
+          </label>
+          <label class="wide">Plugboard
+            <input id="set-plugs" spellcheck="false" autocapitalize="characters">
+          </label>
+          <p class="error" id="settings-error" role="alert"></p>
+          <button type="button" class="btn wide" id="reset-key">Reset to the broadcast key</button>
+        </form>
+
+        <form class="message" id="message-form" autocomplete="off">
+          <label for="set-message">Run your own text from the current rotors</label>
+          <div class="message-row">
+            <input id="set-message" spellcheck="false" placeholder="Paste a ciphertext">
+            <button type="submit" class="btn">Run</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="log" class="block" aria-labelledby="log-heading">
+        <div class="block-head">
+          <h2 id="log-heading">Intercept log</h2>
+          <span class="meta">Newest first</span>
+        </div>
+        <ol class="log" id="log-list"></ol>
+        <p class="empty dark" id="log-empty">No transmissions yet.</p>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <p>Every rotor, notch, ring and plug comes from <a href="https://devfest-vibe-lounge.web.app/api/enigma">/api/enigma</a>. Nothing about the wiring is hard-coded.</p>
+    <p id="source"></p>
+  </footer>
+
+  <script src="enigma.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
